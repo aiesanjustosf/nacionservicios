@@ -5,7 +5,6 @@
 import io
 import re
 from pathlib import Path
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -22,11 +21,6 @@ st.set_page_config(
     page_icon=str(FAVICON) if FAVICON.exists() else None,
     layout="centered",
 )
-
-if LOGO.exists():
-    st.image(str(LOGO), width=220)
-
-st.title("IA – Nación Servicios")
 
 st.markdown(
     """
@@ -55,6 +49,53 @@ except Exception:
     REPORTLAB_OK = False
 
 
+# ---------------- header / footer ----------------
+def render_header(title: str, subtitle: str = ""):
+    c1, c2 = st.columns([1, 6], vertical_alignment="center")
+    with c1:
+        if LOGO.exists():
+            st.image(str(LOGO), width=110)
+    with c2:
+        st.markdown(f"<h1 style='margin:0; padding:0;'>{title}</h1>", unsafe_allow_html=True)
+        if subtitle:
+            st.markdown(
+                f"<div style='margin-top:6px; opacity:0.75;'>{subtitle}</div>",
+                unsafe_allow_html=True,
+            )
+
+
+def render_footer():
+    st.markdown(
+        """
+        <style>
+          .block-container { padding-bottom: 70px; }
+          .aie-footer {
+            position: fixed;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            text-align: center;
+            padding: 10px 0;
+            font-size: 12px;
+            opacity: 0.65;
+            background: rgba(0,0,0,0);
+            z-index: 999;
+          }
+        </style>
+        <div class="aie-footer">
+          © AIE – Herramienta para uso interno | Developer Alfonso Alderete
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+render_header(
+    "IA – Nación Servicios",
+    "Procesa liquidaciones (Nación Servicios): grilla, resumen operativo y controles.",
+)
+
+
 # ---------------- utils ----------------
 def money_to_float(raw: str):
     """
@@ -75,16 +116,12 @@ def money_to_float(raw: str):
         neg = True
         s = s[1:-1]
 
-    # Si tiene , y . decidimos decimal por el último separador
     if "," in s and "." in s:
         if s.rfind(",") > s.rfind("."):
-            # 105.068,00 -> 105068.00
             s = s.replace(".", "").replace(",", ".")
         else:
-            # 89,813.12 -> 89813.12
             s = s.replace(",", "")
     else:
-        # solo coma
         if "," in s:
             parts = s.split(",")
             if len(parts[-1]) == 2 and all(p.isdigit() for p in parts):
@@ -146,26 +183,26 @@ def parse_liquidacion_page(text: str) -> dict:
     total_descuento = money_to_float(_first(r"TOTAL DESCUENTO\s+\$?([0-9\.,]+)", text))
     saldo = money_to_float(_first(r"SALDO\s+\$?([0-9\.,]+)", text))
 
-    # Detalle descuentos (en estas páginas los importes aparecen con $ antes del monto)
     arancel = _sum_matches(r"^\s*Arancel\s+\$\s*([0-9\.,]+)\s*$", text)
     arancel_cf = _sum_matches(r"^\s*Arancel Costo Financiero\s+\$\s*([0-9\.,]+)\s*$", text)
     cargo_fin = _sum_matches(r"^\s*CARGO FINANCIERO.*?\$\s*([0-9\.,]+)\s*$", text)
     iva_21 = _sum_matches(r"^\s*Iva 21%\s+\$\s*([0-9\.,]+)\s*$", text)
 
-    # IMPORTANTE: en RET IIBB la línea trae porcentaje + $monto, capturamos el monto DESPUÉS del $
     ret_iibb = _sum_matches(r"^\s*RET\s*IIBB.*?\$\s*([0-9\.,]+)\s*$", text)
 
     neto_21 = arancel + arancel_cf + cargo_fin
     gasto_21_total = neto_21 + iva_21
 
-    # Controles por liquidación
     descuentos_clasificados = neto_21 + iva_21 + ret_iibb
     otros_desc = (total_descuento - descuentos_clasificados) if not np.isnan(total_descuento) else np.nan
-    ctrl_presentado = (total_presentado - total_descuento - saldo) if (not np.isnan(total_presentado) and not np.isnan(total_descuento) and not np.isnan(saldo)) else np.nan
+    ctrl_presentado = (
+        (total_presentado - total_descuento - saldo)
+        if (not np.isnan(total_presentado) and not np.isnan(total_descuento) and not np.isnan(saldo))
+        else np.nan
+    )
 
-    # check neto vs IVA/0.21 (solo informativo)
     neto_from_iva = (iva_21 / 0.21) if iva_21 else 0.0
-    ctrl_neto = neto_21 - neto_from_iva if iva_21 else 0.0
+    ctrl_neto = (neto_21 - neto_from_iva) if iva_21 else 0.0
 
     return {
         "Fecha Emisión": fecha_emision,
@@ -173,18 +210,14 @@ def parse_liquidacion_page(text: str) -> dict:
         "Nro Liquidación": nro_liq,
         "Establecimiento": establecimiento,
         "CUIT Establecimiento": cuit_est,
-
         "Total Presentado": float(total_presentado) if not np.isnan(total_presentado) else np.nan,
         "Total Descuento": float(total_descuento) if not np.isnan(total_descuento) else np.nan,
         "Saldo": float(saldo) if not np.isnan(saldo) else np.nan,
-
         "Gastos Comisiones Neto 21%": float(neto_21),
         "IVA 21%": float(iva_21),
         "Gasto 21% Total (Neto+IVA)": float(gasto_21_total),
         "Ret IIBB": float(ret_iibb),
-
         "Otros descuentos (no clasificados)": float(otros_desc) if not np.isnan(otros_desc) else np.nan,
-
         "Control: Presentado - Descuento - Saldo": float(ctrl_presentado) if not np.isnan(ctrl_presentado) else np.nan,
         "Control: Neto - IVA/0.21": float(ctrl_neto),
     }
@@ -244,6 +277,7 @@ def resumen_operativo(df: pd.DataFrame) -> pd.DataFrame:
 uploaded = st.file_uploader("Subí un PDF de liquidaciones (Nación Servicios)", type=["pdf"])
 if uploaded is None:
     st.info("La app no almacena datos. Procesamiento local en memoria.")
+    render_footer()
     st.stop()
 
 data = uploaded.read()
@@ -254,11 +288,13 @@ if not txt_full:
         "Este PDF parece estar escaneado (solo imagen). "
         "La herramienta funciona con PDFs donde el texto sea seleccionable."
     )
+    render_footer()
     st.stop()
 
 df = process_pdf(data)
 if df.empty:
     st.error("No se detectaron páginas 'LIQUIDACION A COMERCIO' con 'Nro. de Liquidación'.")
+    render_footer()
     st.stop()
 
 # Período (derivado por rango de Fecha Pago)
@@ -325,12 +361,6 @@ with m3:
 st.subheader("Grilla de liquidaciones")
 
 df_view = df.copy()
-
-# Formateo visual
-if "Fecha Pago" in df_view.columns:
-    # mantenemos string dd/mm/yyyy tal como viene
-    pass
-
 money_cols = [
     "Total Presentado",
     "Total Descuento",
@@ -369,17 +399,14 @@ try:
         money_fmt = wb.add_format({"num_format": "#,##0.00"})
         ws = writer.sheets["Detalle"]
 
-        # anchos
         for idx, col in enumerate(df.columns):
             width = min(max(len(str(col)), 12) + 2, 52)
             ws.set_column(idx, idx, width)
 
-        # formato numérico
         for colname in [c for c in df.columns if c in money_cols]:
             j = df.columns.get_loc(colname)
             ws.set_column(j, j, 20, money_fmt)
 
-        # Resumen
         ws2 = writer.sheets["Resumen_Operativo"]
         ws2.set_column(0, 0, 48)
         ws2.set_column(1, 1, 20, money_fmt)
@@ -417,7 +444,6 @@ if REPORTLAB_OK:
         datos = [["Concepto", "Importe"]]
         for _, r in df_ro.iterrows():
             imp = r["Importe"]
-            # si no es número, lo dejamos como texto
             if isinstance(imp, (int, float, np.floating)) and not np.isnan(imp):
                 imp_txt = fmt_ar(float(imp))
             else:
@@ -452,3 +478,5 @@ if REPORTLAB_OK:
         )
     except Exception as e:
         st.info(f"No se pudo generar el PDF del Resumen Operativo: {e}")
+
+render_footer()
